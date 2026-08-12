@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc --noEmit",
-    "test": "vitest run"
+    "build": "tsc",
+    "test": "vitest run",
+    "start": "node dist/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
