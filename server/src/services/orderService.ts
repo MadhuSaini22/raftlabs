@@ -1,14 +1,110 @@
 import { Types } from 'mongoose'
-import { MenuItem } from '../models/MenuItem.js'
-import { Order, type OrderStatus } from '../models/Order.js'
 import type { z } from 'zod'
+import { AppError } from '../errors/AppError.js'
+import { type OrderStatus } from '../models/Order.js'
+import { menuRepository } from '../repositories/menuRepository.js'
+import { orderRepository } from '../repositories/orderRepository.js'
+import type { OrderStatusPublisher } from '../realtime/orderStatusPublisher.js'
 import type { createOrderSchema } from '../validation/order.js'
-const transitions: Record<OrderStatus, OrderStatus[]> = { RECEIVED: ['PREPARING'], PREPARING: ['OUT_FOR_DELIVERY'], OUT_FOR_DELIVERY: ['DELIVERED'], DELIVERED: [] }
-export class DomainError extends Error { constructor(message: string, public status = 400) { super(message) } }
-export async function createOrder(payload: z.infer<typeof createOrderSchema>) {
-  const ids = payload.items.map(i => new Types.ObjectId(i.menuItemId)); const dishes = await MenuItem.find({ _id: { $in: ids } }).lean()
-  if (dishes.length !== ids.length) throw new DomainError('One or more menu items no longer exist', 404)
-  const byId = new Map(dishes.map(d => [String(d._id), d])); const items = payload.items.map(line => { const dish = byId.get(line.menuItemId)!; if (!dish.isAvailable) throw new DomainError(`${dish.name} is unavailable`); return { menuItemId: dish._id, name: dish.name, price: dish.price, quantity: line.quantity } })
-  return Order.create({ items, customer: payload.customer, totalAmount: items.reduce((sum, item) => sum + item.price * item.quantity, 0), status: 'RECEIVED' })
+import { ORDER_TRANSITIONS } from '../constants/order.js'
+
+type CreateOrderInput = z.infer<typeof createOrderSchema>
+
+const assertValidId = (id: string) => {
+  if (!Types.ObjectId.isValid(id)) throw new AppError('Invalid order ID', 400, 'INVALID_ID')
 }
-export async function updateStatus(id: string, next: OrderStatus) { if (!Types.ObjectId.isValid(id)) throw new DomainError('Invalid order ID'); const order = await Order.findById(id); if (!order) throw new DomainError('Order not found', 404); if (!transitions[order.status as OrderStatus].includes(next)) throw new DomainError(`Cannot transition from ${order.status} to ${next}`, 409); order.status = next; return order.save() }
+
+export const canTransition = (from: OrderStatus, to: OrderStatus) => ORDER_TRANSITIONS[from].includes(to)
+const nextStatus = (status: OrderStatus) => ORDER_TRANSITIONS[status][0]
+
+export const createOrderService = (publisher?: OrderStatusPublisher) => ({
+  async create(payload: CreateOrderInput) {
+    const menuItemIds = payload.items.map(({ menuItemId }) => menuItemId)
+    const dishes = await menuRepository.findByIds(menuItemIds)
+
+    if (dishes.length !== menuItemIds.length) {
+      throw new AppError('One or more menu items do not exist', 404, 'MENU_ITEM_NOT_FOUND')
+    }
+
+    const dishesById = new Map(dishes.map((dish) => [String(dish._id), dish]))
+    const items = payload.items.map(({ menuItemId, quantity }) => {
+      const dish = dishesById.get(menuItemId)
+      if (!dish) throw new AppError('Menu item not found', 404, 'MENU_ITEM_NOT_FOUND')
+      if (!dish.available) throw new AppError(`${dish.name} is unavailable`, 409, 'MENU_ITEM_UNAVAILABLE')
+
+      return { menuItemId: dish._id, name: dish.name, price: dish.price, quantity }
+    })
+
+    const totalAmount = items.reduce((total, item) => total + item.price * item.quantity, 0)
+    const order = await orderRepository.create({ items, customer: payload.customer, totalAmount, status: 'RECEIVED' })
+    try {
+      await publisher?.publishOrderCreated?.({
+        _id: order.id,
+        status: order.status as OrderStatus,
+        totalAmount: order.totalAmount,
+        customer: { name: order.customer!.name, phone: order.customer!.phone, address: order.customer!.address },
+        items: order.items.map((item) => ({ menuItemId: item.menuItemId, name: item.name, price: item.price, quantity: item.quantity })),
+      })
+    } catch {
+      // Order persistence is authoritative; notification failure must not undo it.
+    }
+    return order
+  },
+
+  async getAll() {
+    return orderRepository.findAll()
+  },
+
+  async getById(id: string, trackingToken?: string) {
+    assertValidId(id)
+    const order = trackingToken ? await orderRepository.findByTrackingToken(id, trackingToken) : null
+    if (!order) throw new AppError('Order not found', 404, 'ORDER_NOT_FOUND')
+    return order
+  },
+
+  async updateStatus(id: string) {
+    assertValidId(id)
+    const order = await orderRepository.findById(id)
+    if (!order) throw new AppError('Order not found', 404, 'ORDER_NOT_FOUND')
+    const next = nextStatus(order.status as OrderStatus)
+    if (!next) throw new AppError('Order can no longer be advanced', 409, 'ORDER_ALREADY_FINAL')
+    const updatedOrder = await orderRepository.transitionStatus(id, order.status as OrderStatus, next)
+    if (!updatedOrder) {
+      const currentOrder = await orderRepository.findById(id)
+      if (!currentOrder) throw new AppError('Order not found', 404, 'ORDER_NOT_FOUND')
+      throw new AppError(`Cannot transition from ${currentOrder.status} to its next status`, 409, 'INVALID_STATUS_TRANSITION')
+    }
+
+    if (publisher) {
+      try {
+        await publisher.publishOrderStatusUpdate({
+          orderId: updatedOrder.id,
+          status: updatedOrder.status as OrderStatus,
+          updatedAt: updatedOrder.updatedAt.toISOString(),
+        })
+      } catch {
+        // Status persistence is authoritative; a notification failure must not undo it.
+      }
+    }
+    return updatedOrder
+  },
+
+  async cancel(id: string, reason: string) {
+    assertValidId(id)
+    const order = await orderRepository.findById(id)
+    if (!order) throw new AppError('Order not found', 404, 'ORDER_NOT_FOUND')
+    if (order.status === 'DELIVERED' || order.status === 'CANCELLED') throw new AppError('Order can no longer be cancelled', 409, 'ORDER_NOT_CANCELLABLE')
+    const updatedOrder = await orderRepository.cancel(id, reason)
+    if (!updatedOrder) throw new AppError('Order can no longer be cancelled', 409, 'ORDER_NOT_CANCELLABLE')
+    try { await publisher?.publishOrderStatusUpdate({ orderId: updatedOrder.id, status: 'CANCELLED', updatedAt: updatedOrder.updatedAt.toISOString(), cancellationReason: reason }) } catch {}
+    return updatedOrder
+  },
+
+  async remove(id: string) {
+    assertValidId(id)
+    const order = await orderRepository.deleteById(id)
+    if (!order) throw new AppError('Order not found', 404, 'ORDER_NOT_FOUND')
+  },
+})
+
+export const orderService = createOrderService()
