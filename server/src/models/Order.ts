@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { model, Schema } from 'mongoose'
-import { ORDER_STATUSES, type OrderStatus } from '../constants/order.js'
+import { CANCELLATION_REASON_MAX_LENGTH, ORDER_STATUSES, type OrderStatus } from '../constants/order.js'
 export { ORDER_STATUSES, type OrderStatus } from '../constants/order.js'
 const item = new Schema({
   menuItemId: { type: Schema.Types.ObjectId, required: true },
@@ -19,6 +19,9 @@ export const Order = model('Order', new Schema({
   totalAmount: { type: Number, required: true, min: 0 },
   status: { type: String, enum: ORDER_STATUSES, default: 'RECEIVED', required: true },
   trackingToken: { type: String, required: true, default: () => randomBytes(32).toString('hex'), select: false },
-  cancellationReason: { type: String, maxlength: 300 },
+  // A sparse unique index leaves legacy orders without a key valid while making
+  // repeated checkout requests resolve to one persisted order.
+  idempotencyKey: { type: String, select: false, unique: true, sparse: true },
+  cancellationReason: { type: String, maxlength: CANCELLATION_REASON_MAX_LENGTH },
   cancelledAt: { type: Date },
-}, { timestamps: true }))
+}, { timestamps: true }).index({ createdAt: -1 }).index({ status: 1, createdAt: -1 }))

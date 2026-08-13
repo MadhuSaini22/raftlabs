@@ -6,13 +6,21 @@ type NewOrder = {
   customer: { name: string; phone: string; address: string }
   totalAmount: number
   status: OrderStatus
+  idempotencyKey?: string
 }
 
 export const orderRepository = {
   create: (order: NewOrder) => Order.create(order),
   findById: (id: string) => Order.findById(id),
   findByTrackingToken: (id: string, trackingToken: string) => Order.findOne({ _id: id, trackingToken }),
-  findAll: () => Order.find().sort({ createdAt: -1 }).lean(),
+  findByIdempotencyKey: (idempotencyKey: string) => Order.findOne({ idempotencyKey }).select('+trackingToken'),
+  findPage: (page: number, limit: number, status?: OrderStatus) => {
+    const filter = status ? { status } : {}
+    return Promise.all([
+      Order.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Order.countDocuments(filter),
+    ])
+  },
   transitionStatus: (id: string, expectedStatus: OrderStatus, status: OrderStatus) => Order.findOneAndUpdate(
     { _id: id, status: expectedStatus },
     { $set: { status } },

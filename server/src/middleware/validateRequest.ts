@@ -11,3 +11,13 @@ export const validateBody = (schema: ZodType): RequestHandler => (req, _res, nex
   req.body = result.data
   next()
 }
+
+export const validateQuery = (schema: ZodType): RequestHandler => (req, res, next) => {
+  const result = schema.safeParse(req.query)
+  if (!result.success) {
+    next(new AppError('Invalid request query', 400, 'VALIDATION_ERROR'))
+    return
+  }
+  res.locals.validatedQuery = result.data
+  next()
+}

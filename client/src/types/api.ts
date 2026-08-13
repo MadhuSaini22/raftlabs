@@ -29,3 +29,8 @@ export type CreateOrderPayload = {
 }
 
 export type CreatedOrder = Order & { trackingToken: string }
+
+export type AdminOrdersPage = {
+  orders: Order[]
+  pagination: { page: number; limit: number; total: number; totalPages: number }
+}

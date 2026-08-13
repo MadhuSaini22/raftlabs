@@ -9,6 +9,7 @@ import type { createOrderSchema } from '../validation/order.js'
 import { ORDER_TRANSITIONS } from '../constants/order.js'
 
 type CreateOrderInput = z.infer<typeof createOrderSchema>
+type AdminOrderQuery = { page: number; limit: number; status?: OrderStatus }
 
 const assertValidId = (id: string) => {
   if (!Types.ObjectId.isValid(id)) throw new AppError('Invalid order ID', 400, 'INVALID_ID')
@@ -18,7 +19,11 @@ export const canTransition = (from: OrderStatus, to: OrderStatus) => ORDER_TRANS
 const nextStatus = (status: OrderStatus) => ORDER_TRANSITIONS[status][0]
 
 export const createOrderService = (publisher?: OrderStatusPublisher) => ({
-  async create(payload: CreateOrderInput) {
+  async create(payload: CreateOrderInput, idempotencyKey?: string) {
+    if (idempotencyKey) {
+      const existing = await orderRepository.findByIdempotencyKey(idempotencyKey)
+      if (existing) return { order: existing, created: false }
+    }
     const menuItemIds = payload.items.map(({ menuItemId }) => menuItemId)
     const dishes = await menuRepository.findByIds(menuItemIds)
 
@@ -36,7 +41,16 @@ export const createOrderService = (publisher?: OrderStatusPublisher) => ({
     })
 
     const totalAmount = items.reduce((total, item) => total + item.price * item.quantity, 0)
-    const order = await orderRepository.create({ items, customer: payload.customer, totalAmount, status: 'RECEIVED' })
+    let order
+    try {
+      order = await orderRepository.create({ items, customer: payload.customer, totalAmount, status: 'RECEIVED', idempotencyKey })
+    } catch (error) {
+      if (idempotencyKey && (error as { code?: number }).code === 11000) {
+        const existing = await orderRepository.findByIdempotencyKey(idempotencyKey)
+        if (existing) return { order: existing, created: false }
+      }
+      throw error
+    }
     try {
       await publisher?.publishOrderCreated?.({
         _id: order.id,
@@ -48,11 +62,12 @@ export const createOrderService = (publisher?: OrderStatusPublisher) => ({
     } catch {
       // Order persistence is authoritative; notification failure must not undo it.
     }
-    return order
+    return { order, created: true }
   },
 
-  async getAll() {
-    return orderRepository.findAll()
+  async getPage({ page, limit, status }: AdminOrderQuery) {
+    const [orders, total] = await orderRepository.findPage(page, limit, status)
+    return { orders, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } }
   },
 
   async getById(id: string, trackingToken?: string) {

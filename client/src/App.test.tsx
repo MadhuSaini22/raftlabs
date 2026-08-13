@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -89,6 +89,26 @@ describe('ordering flow', () => {
     await user.type(screen.getByPlaceholderText(/street address/i), '12 Analytical Engine Way')
     await user.click(screen.getByRole('button', { name: /place order/i }))
     expect(await screen.findByRole('button', { name: 'Placing order…' })).toBeDisabled()
+  })
+
+  it('reuses one idempotency key for rapid submits and creates a new key after success', async () => {
+    mockedSocket.mockReturnValue(socket() as never)
+    mockedApi.getMenu.mockResolvedValue([dish])
+    mockedApi.createOrder.mockResolvedValue({ _id: '65fbf2f0df5a0029aab00099', trackingToken: 'token', status: 'RECEIVED', totalAmount: 12.5, customer: { name: 'Ada', phone: '+1 555 123 4567', address: '12 Analytical Engine Way' }, items: [] })
+    const user = userEvent.setup()
+    renderApp()
+    await screen.findByText(dish.name)
+    await user.click(screen.getByRole('button', { name: /add seasonal/i }))
+    await user.click(screen.getByRole('button', { name: 'Open cart' }))
+    await user.click(screen.getByRole('button', { name: /^checkout/i }))
+    await user.type(screen.getByPlaceholderText('Your full name'), 'Ada')
+    await user.type(screen.getByPlaceholderText('(555) 123-4567'), '+1 555 123 4567')
+    await user.type(screen.getByPlaceholderText(/street address/i), '12 Analytical Engine Way')
+    const form = screen.getByRole('button', { name: /place order/i }).closest('form')!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    await waitFor(() => expect(mockedApi.createOrder).toHaveBeenCalledTimes(2))
+    expect(mockedApi.createOrder.mock.calls[0][1]).toBe(mockedApi.createOrder.mock.calls[1][1])
   })
 
   it('shows an order tracking error when the persisted order cannot be retrieved', async () => {

@@ -6,6 +6,8 @@ import { app } from '../src/app.js'
 import { MenuItem } from '../src/models/MenuItem.js'
 import { Order } from '../src/models/Order.js'
 import { createAdminSession, sessionCookie } from '../src/auth/session.js'
+import { ADMIN_SESSION_MAX_AGE_SECONDS } from '../src/constants/auth.js'
+import { resetLoginRateLimit } from '../src/middleware/loginRateLimit.js'
 
 let mongo: MongoMemoryServer
 let availableMenuId: string
@@ -21,6 +23,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
+  resetLoginRateLimit()
   await Promise.all([MenuItem.deleteMany({}), Order.deleteMany({})])
   const [available, unavailable] = await MenuItem.create([
     { name: 'Seasonal Risotto', description: 'Mushrooms and parmesan', price: 12.5, category: 'Main Course', image: 'risotto.jpg', available: true },
@@ -52,8 +55,34 @@ describe('order API', () => {
     expect(response.body.data).toMatchObject({ totalAmount: 25, status: 'RECEIVED', customer })
     expect(response.body.data.trackingToken).toMatch(/^[a-f\d]{64}$/)
     expect(response.body.data.items).toEqual([expect.objectContaining({ menuItemId: availableMenuId, name: 'Seasonal Risotto', price: 12.5, quantity: 2 })])
-    const listed = await request(app).get('/api/v1/orders').set('Cookie', adminCookie()).expect(200)
-    expect(listed.body.data).toHaveLength(1)
+    const listed = await request(app).get('/api/v1/admin/orders').set('Cookie', adminCookie()).expect(200)
+    expect(listed.body.data.orders).toHaveLength(1)
+  })
+
+  it('returns the original order for a repeated idempotency key', async () => {
+    const key = 'checkout-request-1'
+    const [first, repeat] = await Promise.all([
+      request(app).post('/api/v1/orders').set('Idempotency-Key', key).send(orderPayload()),
+      request(app).post('/api/v1/orders').set('Idempotency-Key', key).send(orderPayload()),
+    ])
+    expect([first.status, repeat.status].sort()).toEqual([200, 201])
+    expect(first.body.data._id).toBe(repeat.body.data._id)
+    expect(await Order.countDocuments()).toBe(1)
+    await request(app).post('/api/v1/orders').set('Idempotency-Key', 'checkout-request-2').send(orderPayload()).expect(201)
+    expect(await Order.countDocuments()).toBe(2)
+  })
+
+  it('paginates and filters protected admin orders newest first', async () => {
+    await Order.create([
+      { items: [{ menuItemId: availableMenuId, name: 'A', price: 12.5, quantity: 1 }], customer, totalAmount: 12.5, status: 'RECEIVED' },
+      { items: [{ menuItemId: availableMenuId, name: 'B', price: 12.5, quantity: 1 }], customer, totalAmount: 12.5, status: 'PREPARING' },
+      { items: [{ menuItemId: availableMenuId, name: 'C', price: 12.5, quantity: 1 }], customer, totalAmount: 12.5, status: 'PREPARING' },
+    ])
+    const response = await request(app).get('/api/v1/admin/orders?status=PREPARING&page=1&limit=1').set('Cookie', adminCookie()).expect(200)
+    expect(response.body.data).toMatchObject({ pagination: { page: 1, limit: 1, total: 2, totalPages: 2 } })
+    expect(response.body.data.orders).toHaveLength(1)
+    expect(response.body.data.orders[0].status).toBe('PREPARING')
+    await request(app).get('/api/v1/admin/orders?status=INVALID').set('Cookie', adminCookie()).expect(400)
   })
 
   it('gets an order, advances each valid lifecycle transition, and persists status', async () => {
@@ -122,6 +151,12 @@ describe('order API', () => {
     await request(app).patch(`/api/v1/orders/${created.body.data._id}/cancel`).send({ reason: 'Changed plans' }).expect(401)
   })
 
+  it('rejects an expired server-side admin session', async () => {
+    const created = await request(app).post('/api/v1/orders').send(orderPayload()).expect(201)
+    const expiredCookie = `${sessionCookie}=${createAdminSession(Date.now() - ADMIN_SESSION_MAX_AGE_SECONDS * 1000)}`
+    await request(app).patch(`/api/v1/orders/${created.body.data._id}/status`).set('Cookie', expiredCookie).expect(401)
+  })
+
   it('requires an order-specific tracking token before returning customer data', async () => {
     const created = await request(app).post('/api/v1/orders').send(orderPayload()).expect(201)
     const id = created.body.data._id as string
@@ -156,6 +191,15 @@ describe('order API', () => {
       if (previousClientUrl === undefined) delete process.env.CLIENT_URL
       else process.env.CLIENT_URL = previousClientUrl
     }
+  })
+
+  it('rate limits repeated admin login attempts', async () => {
+    process.env.ADMIN_EMAIL = 'admin@example.com'
+    process.env.ADMIN_PASSWORD = 'correct-horse-battery-staple'
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await request(app).post('/api/v1/admin/auth/login').send({ email: 'admin@example.com', password: 'wrong' }).expect(401)
+    }
+    await request(app).post('/api/v1/admin/auth/login').send({ email: 'admin@example.com', password: 'wrong' }).expect(429, { error: { code: 'LOGIN_RATE_LIMITED', message: 'Too many login attempts. Please try again later.' } })
   })
 
   it('cancels an eligible order, persists its reason, and prevents later transitions', async () => {

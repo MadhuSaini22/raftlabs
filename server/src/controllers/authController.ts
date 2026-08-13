@@ -1,7 +1,8 @@
 import type { RequestHandler } from 'express'
 import { createAdminSession, destroyAdminSession, readCookie, sessionCookie } from '../auth/session.js'
 import { AppError } from '../errors/AppError.js'
-const cookie = (value: string, maxAge = 28800) => {
+import { ADMIN_SESSION_MAX_AGE_SECONDS } from '../constants/auth.js'
+const cookie = (value: string, maxAge = ADMIN_SESSION_MAX_AGE_SECONDS) => {
   const crossSite = process.env.CLIENT_URL?.startsWith('https://')
   return `${sessionCookie}=${value}; HttpOnly; SameSite=${crossSite ? 'None; Secure' : 'Lax'}; Path=/; Max-Age=${maxAge}`
 }

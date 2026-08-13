@@ -10,3 +10,14 @@ export const ORDER_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
 }
 
 export const CANCELLABLE_STATUSES: readonly OrderStatus[] = ['RECEIVED', 'PREPARING']
+
+export const CUSTOMER_NAME_MAX_LENGTH = 80
+export const CUSTOMER_NAME_MIN_LENGTH = 2
+export const CUSTOMER_PHONE_MIN_LENGTH = 7
+export const CUSTOMER_PHONE_MAX_LENGTH = 25
+export const CUSTOMER_ADDRESS_MIN_LENGTH = 5
+export const CUSTOMER_ADDRESS_MAX_LENGTH = 300
+export const CANCELLATION_REASON_MIN_LENGTH = 2
+export const CANCELLATION_REASON_MAX_LENGTH = 300
+export const ORDER_ITEM_MAX_QUANTITY = 20
+export const IDEMPOTENCY_KEY_MAX_LENGTH = 128
