@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AdminOrders } from './AdminOrders'
@@ -85,6 +85,37 @@ describe('admin orders', () => {
     expect(await screen.findByText('CANCELLED', { selector: '.status-badge' })).toBeInTheDocument()
     expect(screen.getByText(/Customer changed plans/)).toBeInTheDocument()
     expect(mockedApi.cancelOrder).toHaveBeenCalledWith(base._id, 'Customer changed plans')
+  })
+
+  it('accepts a cancellation reason at the server-supported maximum length', async () => {
+    mockedSocket.mockReturnValue({ on: vi.fn(), off: vi.fn(), disconnect: vi.fn() } as never)
+    mockedApi.getOrders.mockResolvedValue(page([{ ...base, status: 'RECEIVED' }]))
+    mockedApi.cancelOrder.mockResolvedValue({ ...base, status: 'CANCELLED', cancellationReason: 'x'.repeat(300) })
+    const user = userEvent.setup()
+    renderAdmin()
+    await screen.findByText(/Ada/)
+    await user.click(screen.getByRole('button', { name: 'Cancel order' }))
+    await user.type(screen.getByRole('textbox', { name: 'Cancellation reason' }), 'x'.repeat(300))
+    expect(screen.getByText('300 / 300')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }))
+    await waitFor(() => expect(mockedApi.cancelOrder).toHaveBeenCalledWith(base._id, 'x'.repeat(300)))
+  })
+
+  it('rejects an overlong cancellation reason locally without sending a request', async () => {
+    mockedSocket.mockReturnValue({ on: vi.fn(), off: vi.fn(), disconnect: vi.fn() } as never)
+    mockedApi.getOrders.mockResolvedValue(page([{ ...base, status: 'RECEIVED' }]))
+    const user = userEvent.setup()
+    renderAdmin()
+    await screen.findByText(/Ada/)
+    await user.click(screen.getByRole('button', { name: 'Cancel order' }))
+    const reason = screen.getByRole('textbox', { name: 'Cancellation reason' })
+    fireEvent.change(reason, { target: { value: 'x'.repeat(301) } })
+
+    expect(screen.getByText('301 / 300')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('must be 300 characters or fewer')
+    expect(screen.getByRole('button', { name: 'Confirm cancellation' })).toBeDisabled()
+    expect(mockedApi.cancelOrder).not.toHaveBeenCalled()
+    expect(reason).toHaveValue('x'.repeat(301))
   })
 
   it('clamps a filtered page after an updated order leaves the final page', async () => {

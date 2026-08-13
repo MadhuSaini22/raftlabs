@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
-import { ORDER_STATUSES, type OrderStatus } from '../../constants/order'
+import { CANCELLATION_REASON_MAX_LENGTH, ORDER_STATUSES, type OrderStatus } from '../../constants/order'
 import { api } from '../../lib/api'
 import { createOrderSocket } from '../../lib/socket'
 import type { AdminOrdersPage, Order } from '../../types/api'
@@ -26,6 +26,9 @@ export const AdminOrders = () => {
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set())
   const [reason, setReason] = useState('')
   const [cancelError, setCancelError] = useState(false)
+  const trimmedReason = reason.trim()
+  const cancellationReasonLength = trimmedReason.length
+  const cancellationReasonTooLong = cancellationReasonLength > CANCELLATION_REASON_MAX_LENGTH
   const queryKey = ['orders', page, status] as const
   const { data, isLoading, isError, error } = useQuery({
     queryKey,
@@ -70,11 +73,12 @@ export const AdminOrders = () => {
 
   const confirmCancellation = async () => {
     if (!cancelling) return
+    if (trimmedReason.length < 2 || cancellationReasonTooLong) return
     const orderId = cancelling._id
     setCancelError(false)
     setCancellingIds((current) => new Set(current).add(orderId))
     try {
-      await api.cancelOrder(orderId, reason.trim())
+      await api.cancelOrder(orderId, trimmedReason)
       setCancelling(null)
       await refreshPage(page, queryKey)
     } catch {
@@ -116,6 +120,6 @@ export const AdminOrders = () => {
       })}</div>}
       {pagination.totalPages > 0 && <nav className="admin-pagination" aria-label="Order pages"><button disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {pagination.page} of {pagination.totalPages}</span><button disabled={page >= pagination.totalPages} onClick={() => setPage((value) => value + 1)}>Next</button></nav>}
     </section>
-    {cancelling && <div className="overlay admin-modal"><section role="dialog" aria-modal="true" aria-labelledby="cancel-title"><button className="close" aria-label="Close cancellation dialog" onClick={() => setCancelling(null)}><X /></button><p className="eyebrow"><span /> CANCEL ORDER</p><h2 id="cancel-title">Cancel order #{cancelling._id.slice(-6)}?</h2><p className="confirm-copy">This cannot be undone. Add a reason for the customer and kitchen.</p><label>Cancellation reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={4} /></label>{cancelError && <p className="form-error" role="alert">We couldn’t cancel this order. Please try again.</p>}<div className="modal-actions"><button className="secondary" onClick={() => setCancelling(null)}>Keep order</button><button className="admin-danger" disabled={cancellingIds.has(cancelling._id) || reason.trim().length < 2} onClick={() => void confirmCancellation()}>{cancellingIds.has(cancelling._id) ? 'Cancelling…' : 'Confirm cancellation'}</button></div></section></div>}
+    {cancelling && <div className="overlay admin-modal"><section role="dialog" aria-modal="true" aria-labelledby="cancel-title"><button className="close" aria-label="Close cancellation dialog" onClick={() => setCancelling(null)}><X /></button><p className="eyebrow"><span /> CANCEL ORDER</p><h2 id="cancel-title">Cancel order #{cancelling._id.slice(-6)}?</h2><p className="confirm-copy">This cannot be undone. Add a reason for the customer and kitchen.</p><label>Cancellation reason<textarea value={reason} aria-invalid={cancellationReasonTooLong} onChange={(event) => setReason(event.target.value)} rows={4} /></label><p className="confirm-copy">{cancellationReasonLength} / {CANCELLATION_REASON_MAX_LENGTH}</p>{cancellationReasonTooLong && <p className="form-error" role="alert">Cancellation reason must be {CANCELLATION_REASON_MAX_LENGTH} characters or fewer.</p>}{cancelError && <p className="form-error" role="alert">We couldn’t cancel this order. Please try again.</p>}<div className="modal-actions"><button className="secondary" onClick={() => setCancelling(null)}>Keep order</button><button className="admin-danger" disabled={cancellingIds.has(cancelling._id) || trimmedReason.length < 2 || cancellationReasonTooLong} onClick={() => void confirmCancellation()}>{cancellingIds.has(cancelling._id) ? 'Cancelling…' : 'Confirm cancellation'}</button></div></section></div>}
   </main>
 }
