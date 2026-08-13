@@ -31,7 +31,7 @@ ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me
 ```
 
-The example values are development placeholders only. Credentials are validated on the server; `/admin/login` receives an httpOnly session cookie, never a browser-stored admin token.
+The example values are development placeholders only. Credentials are validated on the server; `/admin/login` receives an httpOnly session cookie, never a browser-stored admin token. For a cross-origin HTTPS deployment, set `CLIENT_URL` to the exact frontend origin so CORS permits credentials and the session cookie uses `SameSite=None; Secure`.
 
 Run the API from either the repository root (`npm --prefix server run dev`) or `server` (`npm run dev`). The entry point explicitly loads `server/.env`. Run the client with `npm run dev` from `client`.
 

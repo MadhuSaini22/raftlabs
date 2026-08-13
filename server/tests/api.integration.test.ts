@@ -134,21 +134,27 @@ describe('order API', () => {
   it('creates and clears an httpOnly admin session through the login flow', async () => {
     const previousEmail = process.env.ADMIN_EMAIL
     const previousPassword = process.env.ADMIN_PASSWORD
+    const previousClientUrl = process.env.CLIENT_URL
     process.env.ADMIN_EMAIL = 'admin@example.com'
     process.env.ADMIN_PASSWORD = 'correct-horse-battery-staple'
+    process.env.CLIENT_URL = 'https://raftlabs-lovat.vercel.app'
     try {
-      const agent = request.agent(app)
-      await agent.post('/api/v1/admin/auth/login').send({ email: 'admin@example.com', password: 'wrong' }).expect(401)
-      const login = await agent.post('/api/v1/admin/auth/login').send({ email: 'admin@example.com', password: 'correct-horse-battery-staple' }).expect(200)
+      await request(app).post('/api/v1/admin/auth/login').send({ email: 'admin@example.com', password: 'wrong' }).expect(401)
+      const login = await request(app).post('/api/v1/admin/auth/login').send({ email: 'admin@example.com', password: 'correct-horse-battery-staple' }).expect(200)
       expect(login.headers['set-cookie']?.[0]).toContain('HttpOnly')
-      await agent.get('/api/v1/admin/auth/session').expect(200, { data: { role: 'ADMIN' } })
-      await agent.post('/api/v1/admin/auth/logout').expect(204)
-      await agent.get('/api/v1/admin/auth/session').expect(401)
+      expect(login.headers['set-cookie']?.[0]).toContain('SameSite=None')
+      expect(login.headers['set-cookie']?.[0]).toContain('Secure')
+      const session = login.headers['set-cookie']?.[0].split(';')[0]
+      await request(app).get('/api/v1/admin/auth/session').set('Cookie', session).expect(200, { data: { role: 'ADMIN' } })
+      await request(app).post('/api/v1/admin/auth/logout').set('Cookie', session).expect(204)
+      await request(app).get('/api/v1/admin/auth/session').set('Cookie', session).expect(401)
     } finally {
       if (previousEmail === undefined) delete process.env.ADMIN_EMAIL
       else process.env.ADMIN_EMAIL = previousEmail
       if (previousPassword === undefined) delete process.env.ADMIN_PASSWORD
       else process.env.ADMIN_PASSWORD = previousPassword
+      if (previousClientUrl === undefined) delete process.env.CLIENT_URL
+      else process.env.CLIENT_URL = previousClientUrl
     }
   })
 
