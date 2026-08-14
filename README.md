@@ -1,74 +1,124 @@
 # Table & Co. Order Management
 
-A full-stack food ordering assessment. Customers browse a MongoDB-backed menu, manage cart quantities, validate checkout details, and track saved orders. The server calculates menu prices and order totals authoritatively.
+A full-stack food ordering application built as a developer assessment. Customers can browse the menu, place and track orders, while administrators manage the live order queue and delivery progress.
 
-## Stack and architecture
+## Features
 
-- Client: React, Vite, TypeScript, TanStack Query, Axios, Socket.IO client, React Hook Form and Zod.
-- Server: Express, TypeScript, Mongoose/MongoDB, Socket.IO and Zod.
-- Server flow: `routes → controllers → services → repositories`; client UI is organized by feature.
+### Customer
 
-## Local setup
+- Browse available menu items and manage a cart.
+- Validate delivery details at checkout and place an order.
+- Track saved orders and receive live status changes.
 
-MongoDB is required. Create `server/.env` from `server/.env.example`, then supply your own values:
+### Admin
 
-```dotenv
-MONGODB_URI=mongodb+srv://username:password@cluster.example.mongodb.net/table-co
-PORT=8000
-CLIENT_URL=http://localhost:5173
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=change-me
+- Sign in to a protected order-management portal.
+- View paginated orders, filter by status, advance delivery progress, and cancel eligible orders with a reason.
+
+### Reliability / backend
+
+- Validate request data and calculate item prices and totals from the server-side menu.
+- Prevent duplicate checkout requests with idempotency keys.
+- Enforce permitted server-side order status transitions.
+- Persist menu items and orders in MongoDB; publish order events through Socket.IO.
+
+## Tech Stack
+
+- **Client:** React, TypeScript, Vite, TanStack Query, Axios, React Hook Form, Zod, Socket.IO Client
+- **Server:** Node.js, Express, TypeScript, Mongoose, MongoDB, Zod, Socket.IO
+
+## Architecture
+
+```mermaid
+flowchart LR
+  C[React client\nCustomer and admin UI] -->|HTTP / Socket.IO| A[Express API]
+  A --> R[Routes, controllers, services\nand repositories]
+  R --> M[(MongoDB)]
+  R -->|Order events| S[Socket.IO server]
+  S -->|Live updates| C
 ```
 
-The API loads `server/.env`; never commit real credentials. Start the backend:
+## Local Setup
 
 ```sh
-cd server
-npm install
-npm run dev
+git clone https://github.com/MadhuSaini22/raftlabs.git
+cd raftlabs
 ```
 
-In a second terminal, create `client/.env` if the API is not local:
-
-```dotenv
-VITE_API_URL=http://localhost:8000/api/v1
-```
-
-Then start the client:
+Install dependencies:
 
 ```sh
 cd client
 npm install
+
+cd ../server
+npm install
+```
+
+Create `client/.env`:
+
+```dotenv
+VITE_API_URL=http://localhost:8000/api/v1
+VITE_SOCKET_URL=http://localhost:8000
+```
+
+Create `server/.env`:
+
+```dotenv
+MONGODB_URI=<your-mongodb-uri>
+PORT=8000
+CLIENT_URL=http://localhost:5173
+ADMIN_EMAIL=<admin-email>
+ADMIN_PASSWORD=<admin-password>
+```
+
+Start the client:
+
+```sh
+cd client
 npm run dev
 ```
 
-## Ordering, tracking, and admin
+Start the server in another terminal:
 
-Checkout sends only menu IDs, quantities, and customer details. Each request carries an idempotency key, so retries resolve to the original persisted order instead of creating a duplicate. Orders progress server-side: `Received → Preparing → Out for Delivery → Delivered`; delivered and cancelled orders are terminal.
+```sh
+cd server
+npm run dev
+```
 
-Each order receives a server-generated 256-bit tracking token. The client stores an order ID/token pair locally, so multiple orders remain independently trackable. Customer retrieval and Socket.IO subscriptions require that token; this is per-order tracking, not a customer-account system.
+## Main Functionality
 
-The admin portal is at `/admin/login`. It uses an httpOnly session cookie; protected admin APIs support paginated, status-filtered order listing, advancing an order, and cancellation with a reason and timestamp. Login attempts are process-local rate limited (suitable for this single-instance assessment, not a shared multi-instance limiter). Admin sessions are in memory and end after a server restart.
+- **Client-side checkout validation:** validates name, phone number, and delivery address before submission.
+- **Server-side validation:** validates order payloads, identifiers, pagination parameters, and cancellation reasons.
+- **Server-authoritative pricing:** resolves menu items and computes totals on the server rather than accepting client prices.
+- **Idempotency:** retries using the same checkout key return the existing order instead of creating another one.
+- **Order status transitions:** the server advances orders through the allowed lifecycle and rejects terminal-state changes.
+- **Pagination and filtering:** the admin order list supports page-based results and status filtering.
+- **Authentication:** admin routes use an authenticated session cookie.
+- **Realtime order updates:** Socket.IO broadcasts new orders and status changes to the relevant customer or authenticated admin clients.
 
-## Deployment
+## Testing
 
-- Frontend: https://raftlabs-lovat.vercel.app
-- Backend: https://raftlabs-server-qwde.onrender.com
-
-For cross-origin HTTPS deployment, set `CLIENT_URL` to the exact frontend URL so credentialed CORS and secure httpOnly cookies work. Build and run the server on Render with `npm run build` and `npm start` from the `server` root.
-
-## Verification
+Client:
 
 ```sh
 cd client
 npm test
 npm run build
 npm run lint
+```
 
-cd ../server
+Server:
+
+```sh
+cd server
 npm test
 npm run build
-
-cd ..
-git diff --check
 ```
+
+## Live Demo
+
+- Customer frontend: https://raftlabs-lovat.vercel.app
+- Admin panel: https://raftlabs-lovat.vercel.app/admin/login
+- Backend: https://raftlabs-server-qwde.onrender.com
+- GitHub repository: https://github.com/MadhuSaini22/raftlabs
